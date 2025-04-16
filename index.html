@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cards to Donut Animation (Three.js)</title>
+    <style>
+      body { margin: 0; background: #000; overflow: hidden; }
+      canvas { display: block; }
+      #sidepanel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 320px;
+        height: 100vh;
+        background: rgba(0,0,0,0.92);
+        color: #fff;
+        font-family: sans-serif;
+        z-index: 20;
+        box-shadow: 2px 0 12px #000a;
+        padding: 0;
+        transition: transform 0.3s;
+        overflow-y: auto;
+      }
+      #sidepanel.collapsed {
+        transform: translateX(-300px);
+      }
+      #sidepanel .toggle {
+        position: absolute;
+        top: 16px;
+        right: -32px;
+        width: 32px;
+        height: 32px;
+        background: #111;
+        color: #fff;
+        border-radius: 0 8px 8px 0;
+        border: none;
+        cursor: pointer;
+        font-size: 1.5rem;
+        z-index: 21;
+        box-shadow: 2px 0 8px #0008;
+      }
+      #sidepanel label, #sidepanel span {
+        display: block;
+        margin: 16px 0 4px 0;
+        font-size: 1rem;
+      }
+      #sidepanel input[type=range] {
+        width: 90%;
+      }
+      #sidepanel input[type=number] {
+        width: 60px;
+      }
+      #sidepanel .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      #sidepanel .section {
+        border-bottom: 1px solid #333;
+        margin-bottom: 12px;
+        padding-bottom: 8px;
+      }
+      #sidepanel .section:last-child {
+        border-bottom: none;
+      }
+      #controls {
+        margin: 0 0 12px 0;
+        background: none;
+        box-shadow: none;
+        padding: 0;
+        position: static;
+        color: #fff;
+      }
+      #controls button {
+        margin: 0 6px 0 0;
+        padding: 6px 12px;
+        background: #333;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      #controls button.selected {
+        background: #0066cc;
+      }
+      #controls button:hover {
+        background: #444;
+      }
+      #controls button.selected:hover {
+        background: #0077dd;
+      }
+      .card-label {
+        position: absolute;
+        color: #fff;
+        font-size: 12px;
+        pointer-events: none;
+        z-index: 10;
+        text-shadow: 0 0 4px #000, 0 0 2px #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="sidepanel" class="">
+      <button class="toggle" id="togglePanelBtn">&#9776;</button>
+      <div class="section" id="controls">
+        <span>Wheel Animation:</span>
+        <button id="outwardBtn" class="selected">Outward</button>
+        <button id="forwardBtn">Forward</button>
+        <button id="fanBtn">Fan</button>
+      </div>
+      <div class="section">
+        <label>Number of Cards (N): <input id="nInput" type="number" min="2" max="300" value="100"></label>
+        <label>Wheel Radius: <input id="radiusInput" type="number" min="10" max="200" value="40"></label>
+        <label>Card Width: <input id="widthInput" type="number" min="1" max="100" value="20"></label>
+        <label>Card Height: <input id="heightInput" type="number" min="1" max="100" value="30"></label>
+        <label>Card Thickness: <input id="thicknessInput" type="number" min="0.001" max="2" step="any" value="0.01"></label>
+        <label>Stack Spacing: <input id="spacingInput" type="number" min="0" max="20" step="any" value="1"></label>
+        <label>Animation Duration (s): <input id="durationInput" type="number" min="0.1" max="10" step="0.1" value="2"></label>
+      </div>
+      <div class="section">
+        <label><input type="checkbox" id="highlight25" checked> Highlight last 25 cards</label>
+        <label><input type="checkbox" id="showIndices"> Show card indices</label>
+        <label><input type="checkbox" id="colorGradient"> Color gradient by index</label>
+        <label><input type="checkbox" id="showGreenBox"> Show green center box</label>
+      </div>
+    </div>
+    <!-- Three.js from CDN -->
+    <script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.153.0/build/three.module.js';
+import { GUI } from 'https://cdn.jsdelivr.net/npm/lil-gui@0.18/+esm';
+
+const d = 60;
+
+var params = {
+  N: 100,
+  wheelRadius: 40,
+  cardWidth: 20,
+  cardHeight: 30,
+  cardThickness: 0.01,
+  spacing: 1,
+  animationDuration: 2,
+  highlight25: true,
+  showIndices: false,
+  colorGradient: false,
+  mode: 0,
+  showGreenBox: false
+};
+
+var scene, camera, renderer, cards, initialStates, targetStates, refCube, cardLabels = [];
+var animating = false, animationStart = 0, animationDone = false, selectedMode = 0;
+let animationLoopStarted = false;
+let width, height, aspect;
+let needsUpdate = true;
+
+// Only create renderer once
+function ensureRenderer() {
+  if (!renderer) {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setClearColor(0x111111, 1); // visible background
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.domElement.style.position = 'fixed';
+    renderer.domElement.style.top = '0';
+    renderer.domElement.style.left = '0';
+    renderer.domElement.style.zIndex = '1';
+    renderer.domElement.style.pointerEvents = 'none';
+    document.body.appendChild(renderer.domElement);
+  } else {
+    renderer.setClearColor(0x111111, 1);
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.domElement.style.zIndex = '1';
+    renderer.domElement.style.pointerEvents = 'none';
+    document.body.appendChild(renderer.domElement);
+  }
+}
+
+function createScene() {
+  // Remove old labels
+  document.querySelectorAll('.card-label').forEach(e => e.remove());
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+  width = window.innerWidth;
+  height = window.innerHeight;
+  aspect = width / height;
+  camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 2000);
+  camera.position.set(120, 120, 120);
+  camera.lookAt(0, 0, 0);
+  ensureRenderer();
+  renderer.setSize(width, height);
+  // Reference cube
+  const refGeometry = new THREE.BoxGeometry(5, 5, 5);
+  const refMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true });
+  refCube = new THREE.Mesh(refGeometry, refMaterial);
+  if (params.showGreenBox) scene.add(refCube);
+  // Move renderer after sidepanel in DOM
+  const panel = document.getElementById('sidepanel');
+  if (panel && renderer.domElement && renderer.domElement.previousSibling !== panel) {
+    document.body.appendChild(renderer.domElement);
+  }
+}
+
+function createCards() {
+  cards = [];
+  initialStates = [];
+  targetStates = [[], [], []];
+  cardLabels = [];
+  // Center the stack at the origin
+  const totalLength = (params.N - 1) * params.spacing;
+  const startZ = -totalLength / 2;
+  console.log('Creating', params.N, 'cards');
+  for (let i = 0; i < params.N; i++) {
+    // Card geometry and mesh
+    const geometry = new THREE.BoxGeometry(params.cardWidth, params.cardHeight, params.cardThickness);
+    // Card faces black, but add a red dot to the front face for rotation visibility
+    let fillColor = 0x000000;
+    if (params.highlight25 && i >= params.N - 25) fillColor = 0x2222ff;
+    if (params.colorGradient) {
+      // Simple gradient: blue to red
+      const t = i / (params.N - 1);
+      fillColor = new THREE.Color().setHSL(0.7 * (1 - t), 1, 0.5).getHex();
+    }
+    const fillMaterial = new THREE.MeshBasicMaterial({ color: fillColor });
+    // Create the card mesh
+    const cardMesh = new THREE.Mesh(geometry, fillMaterial);
+    // White rectangle outline (all four edges)
+    const edges = new THREE.EdgesGeometry(geometry);
+    const lineMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 1 });
+    const wireframe = new THREE.LineSegments(edges, lineMaterial);
+    cardMesh.add(wireframe);
+    // Initial: stack along Z axis, standing up
+    const x = 0, y = 0, z = startZ + i * params.spacing;
+    cardMesh.position.set(x, y, z);
+    cardMesh.rotation.set(0, 0, 0);
+    scene.add(cardMesh);
+    cards.push(cardMesh);
+    // Save initial state
+    initialStates.push({
+      position: new THREE.Vector3(x, y, z),
+      rotation: new THREE.Euler(0, 0, 0)
+    });
+    // Outward: vertical, facing outward (tangent to the wheel)
+    const angle = ((i + 0.5) / params.N) * Math.PI * 2 - Math.PI / 2;
+
+    // --- Normalize Target Y Rotation to (-PI, PI] for shortest path --- 
+    let outwardTargetY = -angle;
+    while (outwardTargetY <= -Math.PI) outwardTargetY += 2 * Math.PI;
+    while (outwardTargetY > Math.PI) outwardTargetY -= 2 * Math.PI;
+
+    let fanTargetY = angle; // Fan mode rotation
+    while (fanTargetY <= -Math.PI) fanTargetY += 2 * Math.PI;
+    while (fanTargetY > Math.PI) fanTargetY -= 2 * Math.PI;
+    // --- End Normalization ---
+
+    // Outward: tangent
+    targetStates[0].push({
+      position: new THREE.Vector3(
+        Math.cos(angle) * params.wheelRadius,
+        0,
+        Math.sin(angle) * params.wheelRadius
+      ),
+      rotation: new THREE.Euler(0, -angle, 0)
+    });
+    // Forward: all face camera
+    targetStates[1].push({
+      position: new THREE.Vector3(
+        Math.cos(angle) * params.wheelRadius,
+        0,
+        Math.sin(angle) * params.wheelRadius
+      ),
+      rotation: new THREE.Euler(0, 0, 0)
+    });
+    // Fan: all rotate the same way (fan out)
+    targetStates[2].push({
+      position: new THREE.Vector3(
+        Math.cos(angle) * params.wheelRadius,
+        0,
+        Math.sin(angle) * params.wheelRadius
+      ),
+      rotation: new THREE.Euler(0, angle, 0)
+    });
+    // Card index label
+    if (params.showIndices) {
+      const label = document.createElement('div');
+      label.className = 'card-label';
+      label.textContent = i;
+      document.body.appendChild(label);
+      cardLabels.push(label);
+    }
+  }
+  console.log('Cards created:', cards.length);
+  needsUpdate = true;
+}
+
+function updateLabels() {
+  // Remove all labels if not showing indices
+  if (!params.showIndices) {
+    cardLabels.forEach(l => l.remove());
+    cardLabels = [];
+    return;
+  }
+  // Ensure there is a label for each card
+  for (let i = 0; i < cards.length; i++) {
+    let label = cardLabels[i];
+    if (!label) {
+      label = document.createElement('div');
+      label.className = 'card-label';
+      document.body.appendChild(label);
+      cardLabels[i] = label;
+    }
+    // Show index
+    let labelText = `${i}`;
+    // For all cards, show qStart and qEnd always
+    const qStart = new THREE.Quaternion().setFromEuler(initialStates[i].rotation);
+    const qEnd = new THREE.Quaternion().setFromEuler(targetStates[params.mode][i].rotation);
+    labelText += `\nqStart: [${qStart.x.toFixed(2)}, ${qStart.y.toFixed(2)}, ${qStart.z.toFixed(2)}, ${qStart.w.toFixed(2)}]`;
+    labelText += `\nqEnd: [${qEnd.x.toFixed(2)}, ${qEnd.y.toFixed(2)}, ${qEnd.z.toFixed(2)}, ${qEnd.w.toFixed(2)}]`;
+    label.textContent = labelText;
+    // Project 3D position to 2D (bottom right corner of card)
+    const localCorner = new THREE.Vector3(params.cardWidth/2, -params.cardHeight/2, 0);
+    const worldCorner = localCorner.clone().applyMatrix4(cards[i].matrixWorld);
+    worldCorner.project(camera);
+    const x = (worldCorner.x * 0.5 + 0.5) * window.innerWidth;
+    const y = (-worldCorner.y * 0.5 + 0.5) * window.innerHeight;
+    label.style.left = `${x}px`;
+    label.style.top = `${y}px`;
+    label.style.display = '';
+  }
+  // Remove any extra labels
+  for (let i = cards.length; i < cardLabels.length; i++) {
+    cardLabels[i].remove();
+  }
+  cardLabels.length = cards.length;
+}
+
+function animate(time) {
+  if (!animationLoopStarted) {
+    animationLoopStarted = true;
+    requestAnimationFrame(animate);
+  } else {
+    requestAnimationFrame(animate);
+  }
+  if (!scene || !camera || !renderer) {
+    console.log('Scene, camera, or renderer missing');
+    return;
+  }
+  
+  // Always render if something changed, regardless of animation state
+  if (animating || needsUpdate) {
+    if (animating) {
+      const t = Math.min((time - animationStart) / 1000 / params.animationDuration, 1);
+      let easedT = t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+   
+      // Animate all modes simultaneously
+      for (let i = 0; i < params.N; i++) {
+        // Interpolate position using global eased time
+        cards[i].position.lerpVectors(
+          initialStates[i].position,
+          targetStates[params.mode][i].position,
+          easedT
+        );
+
+        // Basic slerp Quaternion interpolation
+        const qStart = new THREE.Quaternion().setFromEuler(initialStates[i].rotation);
+        const qEnd = new THREE.Quaternion().setFromEuler(targetStates[params.mode][i].rotation);
+
+        // Ensure shortest path interpolation for consistent rotation direction
+        if (qStart.dot(qEnd) < 0) {
+          qEnd.set(-qEnd.x, -qEnd.y, -qEnd.z, -qEnd.w);
+        }
+
+        cards[i].quaternion.slerpQuaternions(qStart, qEnd, easedT);
+      }
+
+      if (t >= 1) {
+        animating = false;
+        animationDone = true;
+        for (let i = 0; i < params.N; i++) {
+          cards[i].position.copy(targetStates[params.mode][i].position);
+          cards[i].rotation.copy(targetStates[params.mode][i].rotation);
+        }
+      }
+    }
+    
+    // Always render if we need to update
+    renderer.render(scene, camera);
+    
+    // Reset the update flag after rendering
+    needsUpdate = false;
+  }
+  
+  if (params.showIndices) updateLabels();
+}
+
+function resetAndRebuild() {
+  createScene();
+  createCards();
+  animating = false;
+  animationDone = false;
+  needsUpdate = true;
+  if (!animationLoopStarted) animate();
+}
+
+window.addEventListener('resize', () => {
+  width = window.innerWidth;
+  height = window.innerHeight;
+  aspect = width / height;
+  renderer.setSize(width, height);
+  camera.left = -d * aspect;
+  camera.right = d * aspect;
+  camera.top = d;
+  camera.bottom = -d;
+  camera.updateProjectionMatrix();
+  needsUpdate = true;
+});
+
+function startAnimation(mode) {
+  if (!animating) {
+    params.mode = mode;
+    animationDone = false;
+    for (let i = 0; i < params.N; i++) {
+      cards[i].position.copy(initialStates[i].position);
+      cards[i].rotation.copy(initialStates[i].rotation);
+    }
+    animating = true;
+    animationStart = performance.now();
+    needsUpdate = true;
+  }
+}
+
+document.getElementById('outwardBtn').onclick = function() {
+  document.getElementById('outwardBtn').classList.add('selected');
+  document.getElementById('forwardBtn').classList.remove('selected');
+  document.getElementById('fanBtn').classList.remove('selected');
+  startAnimation(0);
+};
+document.getElementById('forwardBtn').onclick = function() {
+  document.getElementById('outwardBtn').classList.remove('selected');
+  document.getElementById('forwardBtn').classList.add('selected');
+  document.getElementById('fanBtn').classList.remove('selected');
+  startAnimation(1);
+};
+document.getElementById('fanBtn').onclick = function() {
+  document.getElementById('outwardBtn').classList.remove('selected');
+  document.getElementById('forwardBtn').classList.remove('selected');
+  document.getElementById('fanBtn').classList.add('selected');
+  startAnimation(2);
+};
+
+let inputsBound = false;
+function bindAllInputs() {
+  if (inputsBound) return;
+  inputsBound = true;
+  const numberInputs = [
+    ['nInput', 'N'],
+    ['radiusInput', 'wheelRadius'],
+    ['widthInput', 'cardWidth'],
+    ['heightInput', 'cardHeight'],
+    ['thicknessInput', 'cardThickness'],
+    ['spacingInput', 'spacing'],
+    ['durationInput', 'animationDuration']
+  ];
+  for (const [id, param] of numberInputs) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.value = params[param];
+      el.addEventListener('input', e => {
+        params[param] = el.value === '' ? '' : Number(el.value);
+        resetAndRebuild();
+      });
+    }
+  }
+  const boolInputs = [
+    ['highlight25', 'highlight25'],
+    ['showIndices', 'showIndices'],
+    ['colorGradient', 'colorGradient'],
+    ['showGreenBox', 'showGreenBox']
+  ];
+  for (const [id, param] of boolInputs) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.checked = params[param];
+      el.addEventListener('input', e => {
+        params[param] = el.checked;
+        resetAndRebuild();
+      });
+    }
+  }
+}
+bindAllInputs();
+// Re-bind inputs only on first load
+
+// Wait for DOM to be ready before initializing Three.js scene and controls
+window.addEventListener('DOMContentLoaded', () => {
+  resetAndRebuild();
+});
+
+// Add toggle functionality for the sidepanel
+document.getElementById('togglePanelBtn').addEventListener('click', () => {
+  document.getElementById('sidepanel').classList.toggle('collapsed');
+  needsUpdate = true;
+});
+    </script>
+  </body>
+</html> 
